@@ -7,7 +7,33 @@ import { NextRequest, NextResponse } from 'next/server';
  *
  * GET  /api/sheets?url=<encoded>&date=...&month=...
  * POST /api/sheets  body: { url, ...payload }
+ *
+ * NOTE: Google Apps Script returns 302 redirects. We handle them manually
+ * because Node.js fetch (undici) converts POST→GET on 302, which can
+ * break the response chain on Vercel's serverless runtime.
  */
+
+// Force dynamic — never cache this route
+export const dynamic = 'force-dynamic';
+
+/**
+ * Follow Google Apps Script redirect chain manually.
+ * GAS responds with 302 → googleusercontent.com to serve the actual response.
+ */
+async function followRedirects(url: string, options: RequestInit, maxRedirects = 5): Promise<Response> {
+  let response = await fetch(url, { ...options, redirect: 'manual' });
+  let redirects = 0;
+
+  while ((response.status === 301 || response.status === 302 || response.status === 307) && redirects < maxRedirects) {
+    const location = response.headers.get('location');
+    if (!location) break;
+    // Follow redirect as GET (body already processed by GAS)
+    response = await fetch(location, { method: 'GET', redirect: 'manual' });
+    redirects++;
+  }
+
+  return response;
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -24,11 +50,7 @@ export async function GET(request: NextRequest) {
       if (key !== 'url') target.searchParams.set(key, value);
     });
 
-    const response = await fetch(target.toString(), {
-      method: 'GET',
-      redirect: 'follow',
-    });
-
+    const response = await followRedirects(target.toString(), { method: 'GET' });
     const text = await response.text();
 
     try {
@@ -36,7 +58,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(data);
     } catch {
       return NextResponse.json(
-        { error: 'Invalid response from Google Sheets', raw: text.substring(0, 200) },
+        { error: 'Invalid response from Google Sheets', raw: text.substring(0, 500) },
         { status: 502 }
       );
     }
@@ -57,11 +79,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing url in body' }, { status: 400 });
     }
 
-    const response = await fetch(url, {
+    const response = await followRedirects(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-      redirect: 'follow',
     });
 
     const text = await response.text();
@@ -71,7 +92,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(data);
     } catch {
       // Apps Script sometimes returns non-JSON on success
-      return NextResponse.json({ status: 'ok', raw: text.substring(0, 200) });
+      return NextResponse.json({ status: 'ok', raw: text.substring(0, 500) });
     }
   } catch (error: any) {
     return NextResponse.json(
