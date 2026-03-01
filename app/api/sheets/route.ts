@@ -20,19 +20,28 @@ export const dynamic = 'force-dynamic';
  * Follow Google Apps Script redirect chain manually.
  * GAS responds with 302 → googleusercontent.com to serve the actual response.
  */
-async function followRedirects(url: string, options: RequestInit, maxRedirects = 5): Promise<Response> {
+async function followRedirects(
+  url: string,
+  options: RequestInit,
+  maxRedirects = 10
+): Promise<{ response: Response; chain: string[] }> {
+  const chain: string[] = [url];
   let response = await fetch(url, { ...options, redirect: 'manual' });
   let redirects = 0;
 
-  while ((response.status === 301 || response.status === 302 || response.status === 307) && redirects < maxRedirects) {
+  while (
+    (response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) &&
+    redirects < maxRedirects
+  ) {
     const location = response.headers.get('location');
     if (!location) break;
-    // Follow redirect as GET (body already processed by GAS)
+    chain.push(`${response.status} → ${location}`);
+    // Follow redirect as GET (body already processed by GAS on first hop)
     response = await fetch(location, { method: 'GET', redirect: 'manual' });
     redirects++;
   }
 
-  return response;
+  return { response, chain };
 }
 
 export async function GET(request: NextRequest) {
@@ -50,7 +59,7 @@ export async function GET(request: NextRequest) {
       if (key !== 'url') target.searchParams.set(key, value);
     });
 
-    const response = await followRedirects(target.toString(), { method: 'GET' });
+    const { response, chain } = await followRedirects(target.toString(), { method: 'GET' });
     const text = await response.text();
 
     try {
@@ -58,7 +67,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(data);
     } catch {
       return NextResponse.json(
-        { error: 'Invalid response from Google Sheets', raw: text.substring(0, 500) },
+        { error: 'Invalid response from Google Sheets', raw: text.substring(0, 500), status: response.status, redirectChain: chain },
         { status: 502 }
       );
     }
@@ -79,7 +88,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing url in body' }, { status: 400 });
     }
 
-    const response = await followRedirects(url, {
+    const { response, chain } = await followRedirects(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -92,7 +101,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(data);
     } catch {
       // Apps Script sometimes returns non-JSON on success
-      return NextResponse.json({ status: 'ok', raw: text.substring(0, 500) });
+      return NextResponse.json({ status: 'ok', raw: text.substring(0, 500), httpStatus: response.status, redirectChain: chain });
     }
   } catch (error: any) {
     return NextResponse.json(
