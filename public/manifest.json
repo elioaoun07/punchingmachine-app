@@ -1,0 +1,49 @@
+{
+  "name": "Punch Clock",
+  "short_name": "Punch Clock",
+  "description": "Simple time tracking PWA - Track your work hours with ease",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Punch",
+      "short_name": "Punch",
+      "description": "Smart punch - auto-detects arrival or departure",
+      "url": "/nfc",
+      "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]
+    },
+    {
+      "name": "Punch In",
+      "short_name": "Arrival",
+      "description": "Record arrival time",
+      "url": "/nfc?type=arrival",
+      "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]
+    },
+    {
+      "name": "Punch Out",
+      "short_name": "Departure",
+      "description": "Record departure time",
+      "url": "/nfc?type=departure",
+      "icons": [{"src": "/icon-192.png", "sizes": "192x192"}]
+    }
+  ]
+}
