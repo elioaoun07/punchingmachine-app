@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CheckCircle, RotateCcw, Pencil, Clock, LogIn, LogOut, AlertTriangle, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getCurrentDate, getCurrentTime, formatDate, formatHours } from '@/lib/utils';
-import { getCachedEntry, cacheEntry, generateId, calculateHoursWorked } from '@/lib/db';
+import { getCachedEntry, cacheEntry, generateId, calculateHoursWorked, getSettings } from '@/lib/db';
 import { upsertEntry, getEntryByDate as getSheetEntry } from '@/lib/sheets';
 import { TimeEntry } from '@/lib/types';
 
@@ -63,6 +63,12 @@ export default function NFCPage() {
   const [existingEntry, setExistingEntry] = useState<TimeEntry | null>(null);
   const [detected, setDetected] = useState(false); // has smart detection run?
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const addDebug = useCallback((msg: string) => {
+    setDebugLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  }, []);
 
   // ── Smart detection: arrival vs departure ──
   useEffect(() => {
@@ -131,8 +137,20 @@ export default function NFCPage() {
   // ── Actually perform the save ──
   const doSave = useCallback(async () => {
     setSaving(true);
+    setDebugLogs([]);
 
     try {
+      // Step 1: Check settings
+      const settings = await getSettings();
+      const sheetUrl = settings.googleSheetUrl?.trim();
+      addDebug(`Settings loaded. Sheet URL: ${sheetUrl ? sheetUrl.substring(0, 60) + '...' : '(EMPTY - NOT CONFIGURED)'}`);
+
+      if (!sheetUrl) {
+        addDebug('ERROR: No Google Sheet URL configured! Go to main page Settings to set it.');
+        setSaving(false);
+        return;
+      }
+
       const noteValue = note.trim() || undefined;
       const now = Date.now();
 
@@ -160,10 +178,61 @@ export default function NFCPage() {
         };
       }
 
-      // Write to Google Sheets (source of truth)
-      const saved = await upsertEntry(entry);
-      if (saved) {
-        entry = saved;
+      addDebug(`Entry built: ${JSON.stringify({ date: entry.date, arrival: entry.arrivalTime, departure: entry.departureTime, id: entry.id })}`);
+
+      // Step 2: Call the API proxy directly for debug visibility
+      const postBody = {
+        url: sheetUrl,
+        action: 'upsert',
+        date: entry.date,
+        arrivalTime: entry.arrivalTime || '',
+        departureTime: entry.departureTime || '',
+        arrivalNote: entry.arrivalNote || '',
+        departureNote: entry.departureNote || '',
+        id: entry.id,
+        updatedAt: entry.updatedAt || Date.now(),
+      };
+      addDebug(`POST /api/sheets with: ${JSON.stringify(postBody).substring(0, 200)}`);
+
+      const response = await fetch('/api/sheets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(postBody),
+      });
+
+      addDebug(`Response status: ${response.status} ${response.statusText}`);
+      const responseText = await response.text();
+      addDebug(`Response body: ${responseText.substring(0, 500)}`);
+
+      let data: any;
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        addDebug('ERROR: Could not parse response as JSON');
+        data = {};
+      }
+
+      if (data.error) {
+        addDebug(`SERVER ERROR: ${data.error} — ${data.message || ''}`);
+        if (data.redirectChain) addDebug(`Redirect chain: ${JSON.stringify(data.redirectChain)}`);
+      }
+
+      if (data.entry) {
+        entry = {
+          id: data.entry.id || entry.id,
+          date: String(data.entry.date),
+          arrivalTime: data.entry.arrivalTime || null,
+          departureTime: data.entry.departureTime || null,
+          arrivalNote: data.entry.arrivalNote || undefined,
+          departureNote: data.entry.departureNote || undefined,
+          createdAt: data.entry.updatedAt || Date.now(),
+          updatedAt: data.entry.updatedAt || Date.now(),
+        };
+        addDebug(`SUCCESS: entry saved — ${JSON.stringify(data.entry)}`);
+      } else if (data.status === 'ok') {
+        addDebug(`Probably OK (non-JSON GAS response). raw: ${data.raw || 'none'}`);
+      } else {
+        addDebug(`Unexpected response shape: ${JSON.stringify(data).substring(0, 300)}`);
       }
 
       // Cache locally for fast NFC access
@@ -184,12 +253,13 @@ export default function NFCPage() {
         hoursWorked,
       });
       setEditing(false);
-    } catch (err) {
+    } catch (err: any) {
+      addDebug(`EXCEPTION: ${err.message || err}`);
       console.error('Failed to save punch:', err);
     } finally {
       setSaving(false);
     }
-  }, [existingEntry, punchType, time, note, currentDate]);
+  }, [existingEntry, punchType, time, note, currentDate, addDebug]);
 
   // ── Punch with overwrite check ──
   const handlePunch = useCallback(async () => {
@@ -520,6 +590,25 @@ export default function NFCPage() {
             : `Punch ${punchType === 'arrival' ? 'Arrival' : 'Departure'}`
           }
         </button>
+      </div>
+
+      {/* ── Debug Panel ── */}
+      <div className="w-full max-w-sm mx-auto px-4 pb-4">
+        <button
+          onClick={() => setShowDebug(d => !d)}
+          className="text-xs text-slate-400 underline"
+        >
+          {showDebug ? 'Hide' : 'Show'} Debug
+        </button>
+        {showDebug && (
+          <div className="mt-2 p-3 bg-slate-900 text-green-400 rounded-xl text-[10px] font-mono leading-relaxed max-h-64 overflow-y-auto">
+            {debugLogs.length === 0 ? (
+              <p className="text-slate-500">Punch to see debug output...</p>
+            ) : (
+              debugLogs.map((log, i) => <p key={i} className="break-all">{log}</p>)
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Confirm Overwrite Dialog ── */}
