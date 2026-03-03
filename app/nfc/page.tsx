@@ -63,11 +63,14 @@ export default function NFCPage() {
   const [existingEntry, setExistingEntry] = useState<TimeEntry | null>(null);
   const [detected, setDetected] = useState(false); // has smart detection run?
   const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
+  const [sheetConfigured, setSheetConfigured] = useState<boolean | null>(null); // null = loading
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const addDebug = useCallback((msg: string) => {
-    setDebugLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  // ── Check if Sheets URL is configured ──
+  useEffect(() => {
+    getSettings().then(s => {
+      setSheetConfigured(!!s.googleSheetUrl?.trim());
+    });
   }, []);
 
   // ── Smart detection: arrival vs departure ──
@@ -137,16 +140,13 @@ export default function NFCPage() {
   // ── Actually perform the save ──
   const doSave = useCallback(async () => {
     setSaving(true);
-    setDebugLogs([]);
+    setSaveError(null);
 
     try {
-      // Step 1: Check settings
+      // Check if sheets are configured before saving
       const settings = await getSettings();
-      const sheetUrl = settings.googleSheetUrl?.trim();
-      addDebug(`Settings loaded. Sheet URL: ${sheetUrl ? sheetUrl.substring(0, 60) + '...' : '(EMPTY - NOT CONFIGURED)'}`);
-
-      if (!sheetUrl) {
-        addDebug('ERROR: No Google Sheet URL configured! Go to main page Settings to set it.');
+      if (!settings.googleSheetUrl?.trim()) {
+        setSheetConfigured(false);
         setSaving(false);
         return;
       }
@@ -178,61 +178,10 @@ export default function NFCPage() {
         };
       }
 
-      addDebug(`Entry built: ${JSON.stringify({ date: entry.date, arrival: entry.arrivalTime, departure: entry.departureTime, id: entry.id })}`);
-
-      // Step 2: Call the API proxy directly for debug visibility
-      const postBody = {
-        url: sheetUrl,
-        action: 'upsert',
-        date: entry.date,
-        arrivalTime: entry.arrivalTime || '',
-        departureTime: entry.departureTime || '',
-        arrivalNote: entry.arrivalNote || '',
-        departureNote: entry.departureNote || '',
-        id: entry.id,
-        updatedAt: entry.updatedAt || Date.now(),
-      };
-      addDebug(`POST /api/sheets with: ${JSON.stringify(postBody).substring(0, 200)}`);
-
-      const response = await fetch('/api/sheets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(postBody),
-      });
-
-      addDebug(`Response status: ${response.status} ${response.statusText}`);
-      const responseText = await response.text();
-      addDebug(`Response body: ${responseText.substring(0, 500)}`);
-
-      let data: any;
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        addDebug('ERROR: Could not parse response as JSON');
-        data = {};
-      }
-
-      if (data.error) {
-        addDebug(`SERVER ERROR: ${data.error} — ${data.message || ''}`);
-        if (data.redirectChain) addDebug(`Redirect chain: ${JSON.stringify(data.redirectChain)}`);
-      }
-
-      if (data.entry) {
-        entry = {
-          id: data.entry.id || entry.id,
-          date: String(data.entry.date),
-          arrivalTime: data.entry.arrivalTime || null,
-          departureTime: data.entry.departureTime || null,
-          arrivalNote: data.entry.arrivalNote || undefined,
-          departureNote: data.entry.departureNote || undefined,
-          createdAt: data.entry.updatedAt || Date.now(),
-          updatedAt: data.entry.updatedAt || Date.now(),
-        };
-        addDebug(`SUCCESS: entry saved — ${JSON.stringify(data.entry)}`);
-      } else if (data.status === 'ok') {
-        addDebug(`Probably OK (non-JSON GAS response). raw: ${data.raw || 'none'}`);
-      } else {
-        addDebug(`Unexpected response shape: ${JSON.stringify(data).substring(0, 300)}`);
+      // Write to Google Sheets (source of truth)
+      const saved = await upsertEntry(entry);
+      if (saved) {
+        entry = saved;
       }
 
       // Cache locally for fast NFC access
@@ -253,13 +202,13 @@ export default function NFCPage() {
         hoursWorked,
       });
       setEditing(false);
-    } catch (err: any) {
-      addDebug(`EXCEPTION: ${err.message || err}`);
+    } catch (err) {
       console.error('Failed to save punch:', err);
+      setSaveError('Failed to save. Please try again.');
     } finally {
       setSaving(false);
     }
-  }, [existingEntry, punchType, time, note, currentDate, addDebug]);
+  }, [existingEntry, punchType, time, note, currentDate]);
 
   // ── Punch with overwrite check ──
   const handlePunch = useCallback(async () => {
@@ -574,6 +523,31 @@ export default function NFCPage() {
         </div>
       </div>
 
+      {/* ── No Sheet URL Warning ── */}
+      {sheetConfigured === false && (
+        <div className="w-full max-w-sm mx-auto px-4">
+          <div className="flex items-start gap-3 p-3.5 bg-red-50 border border-red-200 rounded-xl">
+            <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-red-700">Google Sheet not connected</p>
+              <p className="text-xs text-red-600 mt-0.5">
+                Go to the <a href="/" className="underline font-medium">main page</a> → Settings → paste your Google Apps Script URL.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Save Error ── */}
+      {saveError && (
+        <div className="w-full max-w-sm mx-auto px-4">
+          <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+            <p className="text-xs text-red-600">{saveError}</p>
+          </div>
+        </div>
+      )}
+
       {/* ── PUNCH Button ── */}
       <div className="pt-6 pb-4 max-w-sm mx-auto w-full">
         <button
@@ -590,25 +564,6 @@ export default function NFCPage() {
             : `Punch ${punchType === 'arrival' ? 'Arrival' : 'Departure'}`
           }
         </button>
-      </div>
-
-      {/* ── Debug Panel ── */}
-      <div className="w-full max-w-sm mx-auto px-4 pb-4">
-        <button
-          onClick={() => setShowDebug(d => !d)}
-          className="text-xs text-slate-400 underline"
-        >
-          {showDebug ? 'Hide' : 'Show'} Debug
-        </button>
-        {showDebug && (
-          <div className="mt-2 p-3 bg-slate-900 text-green-400 rounded-xl text-[10px] font-mono leading-relaxed max-h-64 overflow-y-auto">
-            {debugLogs.length === 0 ? (
-              <p className="text-slate-500">Punch to see debug output...</p>
-            ) : (
-              debugLogs.map((log, i) => <p key={i} className="break-all">{log}</p>)
-            )}
-          </div>
-        )}
       </div>
 
       {/* ── Confirm Overwrite Dialog ── */}
