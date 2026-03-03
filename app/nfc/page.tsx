@@ -8,11 +8,10 @@ import {
 } from 'lucide-react';
 import { getCurrentDate, getCurrentTime, formatDate, formatHours } from '@/lib/utils';
 import {
-  cacheEntry, generateId, calculateHoursWorked, getSettings,
+  generateId, calculateHoursWorked, getSettings,
   getProjectList, addProjectToList,
-  getCachedEntriesForDate, getActiveProjectEntry,
 } from '@/lib/db';
-import { upsertEntry, getEntriesByDate as getSheetEntriesByDate } from '@/lib/sheets';
+import { upsertEntry, getEntriesByDate } from '@/lib/sheets';
 import { TimeEntry } from '@/lib/types';
 
 type PunchType = 'arrival' | 'departure';
@@ -117,46 +116,20 @@ export default function NFCPage() {
       const typeParam = params.get('type') as PunchType | null;
       const viewParam = params.get('view') as ActiveView | null;
 
-      // Load cached entries for the date
-      const cachedEntries = await getCachedEntriesForDate(currentDate);
-      const punchEntry = cachedEntries.find(e => !e.entryType || e.entryType === 'punch');
-      const activeProj = cachedEntries.find(e => e.entryType === 'project' && !e.departureTime);
+      // Fetch entries directly from Google Sheets (source of truth)
+      let punchEntry: TimeEntry | null = null;
+      let activeProj: TimeEntry | null = null;
 
-      setExistingEntry(punchEntry ?? null);
-      setActiveProject(activeProj ?? null);
+      try {
+        const sheetEntries = await getEntriesByDate(currentDate);
+        punchEntry = sheetEntries.find(e => !e.entryType || e.entryType === 'punch') ?? null;
+        activeProj = sheetEntries.find(e => e.entryType === 'project' && !e.departureTime) ?? null;
+      } catch {
+        // Sheets unavailable — continue with nulls
+      }
 
-      // Background: fetch latest from Google Sheets
-      getSheetEntriesByDate(currentDate).then(sheetEntries => {
-        if (sheetEntries.length > 0) {
-          const sheetPunch = sheetEntries.find(e => !e.entryType || e.entryType === 'punch');
-          const sheetActiveProj = sheetEntries.find(e => e.entryType === 'project' && !e.departureTime);
-
-          if (sheetPunch) {
-            setExistingEntry(sheetPunch);
-            cacheEntry(sheetPunch);
-            // Re-detect punch type based on fresh data
-            if (!typeParam) {
-              if (sheetPunch.arrivalTime && !sheetPunch.departureTime) {
-                setPunchType('departure');
-              } else if (sheetPunch.arrivalTime && sheetPunch.departureTime) {
-                setPunchType('arrival');
-              }
-            }
-          }
-          if (sheetActiveProj) {
-            setActiveProject(sheetActiveProj);
-            cacheEntry(sheetActiveProj);
-          }
-
-          // Cache all entries
-          sheetEntries.forEach(e => cacheEntry(e));
-
-          // Auto-switch to project view if arrival logged and no departure
-          if (!viewParam && !typeParam && sheetPunch && sheetPunch.arrivalTime && !sheetPunch.departureTime) {
-            setActiveView('project');
-          }
-        }
-      }).catch(() => {});
+      setExistingEntry(punchEntry);
+      setActiveProject(activeProj);
 
       // Punch type detection
       if (typeParam === 'arrival' || typeParam === 'departure') {
@@ -243,7 +216,6 @@ export default function NFCPage() {
 
       const savedResult = await upsertEntry(entry);
       if (savedResult) entry = savedResult;
-      await cacheEntry(entry);
 
       let hoursWorked: number | null = null;
       if (entry.arrivalTime && entry.departureTime) {
@@ -306,22 +278,20 @@ export default function NFCPage() {
     setEditing(false);
     setTime(getCurrentTime());
     (async () => {
-      const entries = await getCachedEntriesForDate(currentDate);
-      const punchEntry = entries.find(e => !e.entryType || e.entryType === 'punch');
-      setExistingEntry(punchEntry ?? null);
-      if (punchEntry) {
-        if (punchEntry.arrivalTime && !punchEntry.departureTime) {
-          setPunchType('departure');
-        } else {
-          setPunchType('arrival');
+      try {
+        const entries = await getEntriesByDate(currentDate);
+        const punchEntry = entries.find(e => !e.entryType || e.entryType === 'punch');
+        setExistingEntry(punchEntry ?? null);
+        if (punchEntry) {
+          if (punchEntry.arrivalTime && !punchEntry.departureTime) {
+            setPunchType('departure');
+          } else {
+            setPunchType('arrival');
+          }
         }
-      }
-      const ap = entries.find(e => e.entryType === 'project' && !e.departureTime);
-      setActiveProject(ap ?? null);
-      // Also refresh from sheet
-      getSheetEntriesByDate(currentDate).then(se => {
-        se.forEach(e => cacheEntry(e));
-      }).catch(() => {});
+        const ap = entries.find(e => e.entryType === 'project' && !e.departureTime);
+        setActiveProject(ap ?? null);
+      } catch {}
     })();
   }, [currentDate]);
 
@@ -345,8 +315,7 @@ export default function NFCPage() {
       // Auto-close active project
       if (activeProject) {
         const updated: TimeEntry = { ...activeProject, departureTime: projectTime, updatedAt: now };
-        const savedUp = await upsertEntry(updated);
-        await cacheEntry(savedUp || updated);
+        await upsertEntry(updated);
         closedInfo = { name: activeProject.projectName || 'Unknown', endTime: projectTime };
       }
 
@@ -364,7 +333,6 @@ export default function NFCPage() {
 
       const savedEntry = await upsertEntry(newEntry);
       const finalEntry = savedEntry || newEntry;
-      await cacheEntry(finalEntry);
       setActiveProject(finalEntry);
 
       setProjectSaved({
@@ -390,8 +358,7 @@ export default function NFCPage() {
     try {
       const now = Date.now();
       const updated: TimeEntry = { ...activeProject, departureTime: projectTime, updatedAt: now };
-      const savedUp = await upsertEntry(updated);
-      await cacheEntry(savedUp || updated);
+      await upsertEntry(updated);
 
       setProjectSaved({
         date: currentDate,
@@ -414,10 +381,10 @@ export default function NFCPage() {
     setProjectName('');
     setProjectTime(getCurrentTime());
     setSaveError(null);
-    getCachedEntriesForDate(currentDate).then(entries => {
+    getEntriesByDate(currentDate).then(entries => {
       const ap = entries.find(e => e.entryType === 'project' && !e.departureTime);
       setActiveProject(ap ?? null);
-    });
+    }).catch(() => {});
   }, [currentDate]);
 
   // ── Project: Add to saved list ──
