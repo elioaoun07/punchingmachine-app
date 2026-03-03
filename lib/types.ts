@@ -5,6 +5,8 @@ export interface TimeEntry {
   departureTime: string | null; // HH:MM
   arrivalNote?: string;
   departureNote?: string;
+  entryType?: 'punch' | 'project';
+  projectName?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -14,6 +16,7 @@ export interface Settings {
   hourlyRate: number;
   currency: string;
   googleSheetUrl?: string;
+  projectList?: string[];
 }
 
 export interface DailyStats {

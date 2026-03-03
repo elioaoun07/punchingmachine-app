@@ -106,3 +106,52 @@ export function calculateHoursWorked(
   const diff = (depH * 60 + depM) - (arrH * 60 + arrM);
   return diff > 0 ? diff / 60 : 0;
 }
+
+// ── Project list management (stored in settings) ──
+
+export async function getProjectList(): Promise<string[]> {
+  const settings = await getSettings();
+  return settings.projectList || [];
+}
+
+export async function saveProjectList(projects: string[]): Promise<void> {
+  const db = await getDB();
+  const existing = await db.get('settings', SETTINGS_ID);
+  const settings: Settings = existing || { id: SETTINGS_ID, hourlyRate: 0, currency: 'USD', googleSheetUrl: '' };
+  settings.projectList = projects;
+  await db.put('settings', settings);
+}
+
+export async function addProjectToList(name: string): Promise<string[]> {
+  const list = await getProjectList();
+  const trimmed = name.trim();
+  if (trimmed && !list.includes(trimmed)) {
+    list.push(trimmed);
+    await saveProjectList(list);
+  }
+  return list;
+}
+
+export async function removeProjectFromList(name: string): Promise<string[]> {
+  const list = await getProjectList();
+  const filtered = list.filter(p => p !== name);
+  await saveProjectList(filtered);
+  return filtered;
+}
+
+// ── Multiple entries per date (for project tracking) ──
+
+export async function getCachedEntriesForDate(date: string): Promise<TimeEntry[]> {
+  const db = await getDB();
+  return db.getAllFromIndex('entries', 'by-date', date);
+}
+
+export async function getCachedPunchEntry(date: string): Promise<TimeEntry | undefined> {
+  const entries = await getCachedEntriesForDate(date);
+  return entries.find(e => !e.entryType || e.entryType === 'punch');
+}
+
+export async function getActiveProjectEntry(date: string): Promise<TimeEntry | null> {
+  const entries = await getCachedEntriesForDate(date);
+  return entries.find(e => e.entryType === 'project' && !e.departureTime) || null;
+}
