@@ -3,8 +3,7 @@ import { TimeEntry, Settings } from './types';
 
 /**
  * IndexedDB — used ONLY for:
- *  1. Settings storage (hourly rate, currency, Google Sheet URL)
- *  2. Today's entry cache on the NFC page (fast validation, offline fallback)
+ *  1. Settings storage (hourly rate, currency, Google Sheet URL, project list)
  *
  * Google Sheets is the source of truth for all time entries.
  */
@@ -76,24 +75,6 @@ export async function saveSettings(
   return settings;
 }
 
-// ── Today's entry cache (NFC page only) ──
-
-export async function getCachedEntry(date: string): Promise<TimeEntry | undefined> {
-  const db = await getDB();
-  const entries = await db.getAllFromIndex('entries', 'by-date', date);
-  return entries[0];
-}
-
-export async function cacheEntry(entry: TimeEntry): Promise<void> {
-  const db = await getDB();
-  await db.put('entries', entry);
-}
-
-export async function deleteCachedEntry(id: string): Promise<void> {
-  const db = await getDB();
-  await db.delete('entries', id);
-}
-
 // ── Pure utility (no DB) ──
 
 export function calculateHoursWorked(
@@ -137,21 +118,4 @@ export async function removeProjectFromList(name: string): Promise<string[]> {
   const filtered = list.filter(p => p !== name);
   await saveProjectList(filtered);
   return filtered;
-}
-
-// ── Multiple entries per date (for project tracking) ──
-
-export async function getCachedEntriesForDate(date: string): Promise<TimeEntry[]> {
-  const db = await getDB();
-  return db.getAllFromIndex('entries', 'by-date', date);
-}
-
-export async function getCachedPunchEntry(date: string): Promise<TimeEntry | undefined> {
-  const entries = await getCachedEntriesForDate(date);
-  return entries.find(e => !e.entryType || e.entryType === 'punch');
-}
-
-export async function getActiveProjectEntry(date: string): Promise<TimeEntry | null> {
-  const entries = await getCachedEntriesForDate(date);
-  return entries.find(e => e.entryType === 'project' && !e.departureTime) || null;
 }
