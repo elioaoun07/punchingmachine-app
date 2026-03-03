@@ -29,7 +29,6 @@ export default function ExportButton({ year, month }: ExportButtonProps) {
         return;
       }
 
-      // Prepare data for Excel
       const data = entries.map((entry) => {
         const hours = calculateHoursWorked(entry.arrivalTime, entry.departureTime);
         return {
@@ -43,7 +42,6 @@ export default function ExportButton({ year, month }: ExportButtonProps) {
         };
       });
 
-      // Add totals row
       const totalHours = entries.reduce((sum, e) => 
         sum + calculateHoursWorked(e.arrivalTime, e.departureTime), 0);
       
@@ -57,28 +55,16 @@ export default function ExportButton({ year, month }: ExportButtonProps) {
           : '',
       });
 
-      // Create workbook
       const ws = XLSX.utils.json_to_sheet(data);
-      
-      // Set column widths
       ws['!cols'] = [
-        { wch: 20 }, // Date
-        { wch: 12 }, // Arrival
-        { wch: 12 }, // Departure
-        { wch: 12 }, // Hours
-        { wch: 12 }, // Earnings
+        { wch: 20 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 },
       ];
 
       const wb = XLSX.utils.book_new();
       const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
         'July', 'August', 'September', 'October', 'November', 'December'];
-      const sheetName = `${monthNames[month]} ${year}`;
-      
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
-
-      // Generate and download file
-      const fileName = `TimeSheet_${year}_${String(month + 1).padStart(2, '0')}.xlsx`;
-      XLSX.writeFile(wb, fileName);
+      XLSX.utils.book_append_sheet(wb, ws, `${monthNames[month]} ${year}`);
+      XLSX.writeFile(wb, `TimeSheet_${year}_${String(month + 1).padStart(2, '0')}.xlsx`);
     } catch (error) {
       console.error('Export error:', error);
       alert('Failed to export. Please try again.');

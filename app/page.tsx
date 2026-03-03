@@ -8,6 +8,8 @@ import HoursChart from '@/components/HoursChart';
 import Insights from '@/components/Insights';
 import HourlyRateInput from '@/components/HourlyRateInput';
 import ExportButton from '@/components/ExportButton';
+import SyncMasterButton from '@/components/SyncMasterButton';
+import ProjectListManager from '@/components/ProjectListManager';
 import { parseUrlParams } from '@/lib/utils';
 
 type Tab = 'punch' | 'dashboard' | 'settings';
@@ -160,6 +162,12 @@ export default function Home() {
               month={selectedMonth.month}
             />
 
+            {/* Sync Master Sheet Button */}
+            <SyncMasterButton
+              year={selectedMonth.year}
+              month={selectedMonth.month}
+            />
+
           </div>
         )}
 
@@ -168,6 +176,8 @@ export default function Home() {
             <h2 className="font-semibold text-gray-700">Settings</h2>
             
             <HourlyRateInput onChange={handleEntryUpdated} />
+
+            <ProjectListManager />
 
             {/* NFC/QR Setup Instructions */}
             <div className="bg-white rounded-xl p-5 shadow-sm">
